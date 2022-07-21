@@ -1,0 +1,148 @@
+version: '3.9'
+services:
+
+  geoapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: geoapi
+    env_file:
+      - .env
+    container_name: geoapi
+    entrypoint: /code/startup_service.sh
+    hostname: server
+    ports:
+      - '8000:8000'
+    networks:
+      - network_geoapi
+    volumes:
+      - .:/code
+      - geoapi_data:/tmp/geo_file_storage/
+    environment:
+      - PORT=8000
+    depends_on:
+      - postgres
+
+  geoapi2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: geoapi2
+    env_file:
+      - .env
+    container_name: geoapi2
+    entrypoint: /code/startup_service.sh
+    hostname: server2
+    ports:
+      - '8001:8001'
+    networks:
+      - network_geoapi
+    volumes:
+      - .:/code
+      - geoapi_data:/tmp/geo_file_storage/
+    environment:
+      - PORT=8001
+
+  nginx-server:
+    container_name: nginx-server
+    build: ./nginx
+    ports:
+      - 1337:80
+    networks:
+      - network_geoapi
+    depends_on:
+      - geoapi
+      - geoapi2
+
+  postgres:
+    image: mdillon/postgis:11
+    container_name: postgres
+    ports:
+      - "25432:5432"
+    environment:
+      POSTGRES_DB: 'publication'
+      POSTGRES_USER: 'postgres'
+      POSTGRES_PASSWORD: 'SECRET'
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,postgis_topology
+    networks:
+      - network_geoapi
+    volumes:
+      - volume_geoapi:/var/lib/postgresql/
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+  
+  pgadmin4:
+    image: dpage/pgadmin4
+    container_name: pgadmin4
+    ports:
+      - '5050:80'
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@domain.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    networks:
+      - network_geoapi
+    links:
+      - postgres
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=mypass
+    networks:
+      - network_geoapi
+    ports:
+      # Expose the port for the worker to add/get tasks
+      - 5672:5672
+      # OPTIONAL: Expose the GUI port
+      - 15672:15672
+
+  celeryworker:
+    container_name: celeryworker
+    build: .
+    networks:
+      - network_geoapi
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    entrypoint: /code/start_celery.sh
+    environment:
+      - PYTHONUNBUFFERED=1
+      - rabbitmq_uri=amqp://admin:mypass@rabbitmq:5672
+      - CELERY_BROKER_URL=amqp://admin:mypass@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=amqp://admin:mypass@rabbitmq:5672//
+    links:
+      - rabbitmq
+    depends_on:
+      - rabbitmq
+
+  flower:  
+    image: mher/flower
+    container_name: flower
+    networks:
+      - network_geoapi
+    command: celery --broker=amqp://admin:mypass@rabbitmq:5672// flower --broker_api=http://admin:mypass@rabbitmq:15672/api/ --port=8888
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:mypass@rabbitmq:5672//
+    ports:  
+      - 8888:8888
+    depends_on:
+      - celeryworker
+      - geoapi
+      - geoapi2
+
+volumes:
+  volume_geoapi:
+    driver: 'local'
+  geoserver_data:
+  geoapi_data:
+
+networks:
+  network_geoapi:
+    driver: 'bridge'

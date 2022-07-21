@@ -1,0 +1,10 @@
+django
+psycopg2-binary
+djangorestframework
+requests
+geopandas
+SQLAlchemy
+geoalchemy2
+celery==4.2
+gunicorn
+kombu
